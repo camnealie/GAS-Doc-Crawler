@@ -1,0 +1,180 @@
+/* Google Apps Document Crawler - find all linked, internal documentation (or probably just most of it) */
+/* This script needs to be connected to a Google Sheets document.
+/* Made by Cam Nealie 19/12/17 */
+
+// Run the "start" script once - this will take some time. Keep running doitagain() until you stop recieving 
+
+var key = ""; // Link to your first internal document.
+var email = ""; // This is here so you can get an alert if the script fails. It can be a slow process.
+
+function start() {
+  
+    try{var ss = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("new");}catch(e){var ss = ""}
+    try{var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("log");}catch(e){var log = SpreadsheetApp.getActiveSpreadsheet().insertSheet().setName("log")}
+    //Round one, just starting with one Node...
+    var arr = getAllLinks(key);
+    ss.getRange(2, 1, arr.length, arr[0].length).setValues(arr)
+    doitagain();
+}
+
+function setupenvironment(){
+try{SpreadsheetApp.getActiveSpreadsheet().getSheetByName("new")}catch(e){SpreadsheetApp.getActiveSpreadsheet().insertSheet().setName("new");}
+try{SpreadsheetApp.getActiveSpreadsheet().getSheetByName("log")}catch(e){SpreadsheetApp.getActiveSpreadsheet().insertSheet().setName("log");}
+SpreadsheetApp.getActiveSpreadsheet().getSheetByName("new").getRange("A1:G1").setValues([["Node URL", "Child URL", "Node Name", "Child Name", "Relationship", "Node ID", "Child Node ID"]])
+try{SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sheet1").hideSheet();}catch(e){}
+}
+
+
+function doitagain() {
+    try {
+        var ss = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("new");
+        var copychildren = ss.getRange("B2:D").getDisplayValues();
+        var allnodenames = ss.getRange("C2:C").getDisplayValues();
+        var log = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("log");
+
+        for (i = 0; i < copychildren.length; i++) {
+            if (copychildren[i][2] == "" || copychildren[i][2] == " "){Logger.log("failone"); continue}
+            //if a child name is already in Node Name that means we've already run it through the script and we can move on. 
+            //Otherwise, pick it, and follow that rabbit hole. Also it can't be 'dead'
+            var allnodenames = ss.getRange("C2:C").getDisplayValues();
+            var returnarray = ""
+            log.getRange("A1").setValue("working on.. " + copychildren[i][2]);
+            Logger.log("working on it.... " + copychildren[i][2]);
+            //If the node name isn't "dead"...
+            if (copychildren[i][2] != "dead") { Logger.log("not dead");
+                //And if it doesn't appear in the index of existing nodenames....
+                if (flatten(allnodenames).indexOf(copychildren[i][2]) == -1) { Logger.log("doesn't appear in nodenames...");
+                    var returnarray = getAllLinks(copychildren[i][0]); Logger.log("return array = " + returnarray.type);
+                    //If we have some items returned (which we always should), then make some return values!
+                    if (returnarray.length) { Logger.log("returnarray has length");
+                        ss.getRange(ss.getLastRow() + 1, 1, returnarray.length, returnarray[0].length).setValues(returnarray)
+                        }
+                        //If we have no items returned, then make some return values!
+                        else{ Logger.log("returnarray has NO length");
+                            ss.getRange(ss.getLastRow() + 1, 1, 1, 4).setValues([[copychildren[i][0], "dead", copychildren[i][2], "dead"]])
+                        }
+                    }
+                }
+            }
+        }
+     catch (e) {
+        MailApp.sendEmail(email, "crawl failed", e.message)
+    }
+}
+
+
+
+/*Goes into a the given link, and gets all the hyperlinks from inside. 
+Uses some scripts offered from here https://stackoverflow.com/questions/18727341/get-all-links-in-a-document */
+
+function getAllLinks(parentlink) {
+    var parentlinkname = getname(parentlink);
+
+    try {
+        var links = [];
+        element = DocumentApp.openByUrl(parentlink).getBody();
+        var textObj = element.editAsText();
+        var text = element.getText();
+        var inUrl = false;
+        for (var ch = 0; ch < text.length; ch++) {
+            var url = textObj.getLinkUrl(ch);
+
+            if (url != null) {
+                if (!inUrl) {
+                    inUrl = true;
+                    var curUrl = String(url); // grab a copy
+                } else {
+                    curUrl.endOffsetInclusive = ch;
+                }
+            } else {
+                if (inUrl) {
+                    inUrl = false;
+                    //now we see if the link is a drive file
+                    if (curUrl.indexOf("docs.google.com") > -1 || curUrl.indexOf("drive.google.com") > -1) {
+                        var childlinkname = getname(curUrl);
+                        links.push([parentlink, curUrl, parentlinkname, childlinkname, (parentlinkname + "--> " + childlinkname)]); // add to links
+                        curUrl = {};
+                    }
+                    curUrl = {};
+                }
+            }
+        }
+        return (links)
+    } catch (e) {
+        return ([
+            [parentlink, "dead", parentlinkname, "", ""]
+        ])
+    }
+}
+
+
+function getname(url) {
+    try {
+        var name = DriveApp.getFileById(getIdFromUrl(url)).getName()
+    } catch (e) {
+        try {
+            var name = DocumentApp.openByUrl(url).getName()
+        } catch (e) {
+            try {
+                var name = SpreadsheetApp.openByUrl(url).getName()
+            } catch (e) {
+                var name = "Locked " + getIdFromUrl(url)
+            }
+        }
+    }
+    return name
+}
+
+//no can do document app for owners
+function getowner(url) {
+    try {
+        var owner = DriveApp.getFileById(getIdFromUrl(url)).getOwner().getName();
+    } catch (e) {
+        try {
+            var owner = SpreadsheetApp.openByUrl(url).getOwner().getEmail();
+        } catch (e) {
+            try {
+                var owner = SpreadsheetApp.openByUrl(url).getOwner().getEmail();
+            } catch (e) {
+                var name = "unknown";
+            }
+        }
+    }
+    return owner
+}
+
+function getlastupdated(url) {
+    try {
+        var lastupdate = DriveApp.getFileById(getIdFromUrl(url)).getLastUpdated();
+    } catch (e) {
+                var lastupdate = "unknown";
+            }
+    return lastupdate
+}
+
+
+function NodeInfo(){
+var s1 = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Nodes")
+var arr = s1.getRange("C2:C").getDisplayValues();
+
+try{
+for (u=0;u<arr.length;u++){
+var owner = getowner(arr[u][0]);
+var lastupdate = getlastupdated(arr[u][0]);
+
+s1.getRange(u+2, 4, 1, 2).setValues([[owner, lastupdate]]);
+
+}}catch(e){MailApp.sendEmail(email, "crawl failed", e.message)}
+
+}
+
+
+
+function getIdFromUrl(url) {
+    return url.match(/[-\w]{25,}/);
+}
+
+
+function flatten(arrayOfArrays) {
+    return ([].concat.apply([], arrayOfArrays));
+}
